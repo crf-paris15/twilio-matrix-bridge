@@ -31,7 +31,7 @@ async def incoming_sms(From: str = Form(...), Body: str = Form(...)):
         Body=Body
     )
     client.send_action(action)
-    client.logout()
+    client.logoff()
     return {"status": "success"}
 
 @app.post("/outgoing-sms")
