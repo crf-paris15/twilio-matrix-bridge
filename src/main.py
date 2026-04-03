@@ -22,11 +22,11 @@ async def incoming_sms(From: str = Form(...), Body: str = Form(...)):
     client = AMIClient(address=AMI_HOST, port=5038)
     client.login(username=AMI_USER, secret=AMI_PASS)
 
-    # On forge le SIP MESSAGE pour l'extension 101 (exemple)
+    # On forge le SIP MESSAGE pour l'extension 100 (exemple)
     # Dans une version prod, on mapperait le numéro Twilio à une extension
     action = SimpleAction(
         'MessageSend',
-        To='pjsip:101',
+        To='pjsip:100',
         From=f'SMS:{From}',
         Body=Body
     )
