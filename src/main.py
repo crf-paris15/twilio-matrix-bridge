@@ -1,5 +1,7 @@
 import asyncio
 import os
+import sqlite3
+import csv
 
 from contextlib import asynccontextmanager
 
@@ -18,15 +20,58 @@ twilio_client = TwilioClient(TWILIO_SID, TWILIO_TOKEN)
 MATRIX_URI = os.getenv("MATRIX_URI")
 MATRIX_USER = os.getenv("MATRIX_USER")
 MATRIX_PASSWORD = os.getenv("MATRIX_PASSWORD")
-
 MATRIX_TIMEOUT = 30000
 MATRIX_USERS_TO_INVITE = ["@pul:sms.crf.tools", "@dlus:sms.crf.tools", "@rlu:sms.crf.tools"]
+
+MATRIX_FIRST_SEND = "!zyCkywgybkaPAAhKbx:sms.crf.tools"
+
+# CSV configuration
+CSV_PATH = "/code/contacts.csv"
+
+# SQLite configuration
+SQLITE_PATH = "/code/database.db"
+db_connection = sqlite3.connect(SQLITE_PATH)
+db_cursor = db_connection.cursor()
+
+try:
+    db_cursor.execute("SELECT * FROM rooms LIMIT 1")
+    db_cursor.fetchall()
+except sqlite3.OperationalError:
+    print(f"Configuring DB")
+    db_cursor.execute("CREATE TABLE rooms(id TEXT PRIMARY KEY, phone TEXT NOT NULL)")
+    print(f"DB configured")
 
 # Global variable to hold the Matrix sync task
 matrix_sync_task = None
 
 # Callback for handling incoming Matrix messages
 async def message_callback(room: MatrixRoom, event: RoomMessageText) -> None:
+    if room.room_id == MATRIX_FIRST_SEND:
+        # Retrieve the Matrix client from the application state
+        matrix_client = app.state.matrix_client
+
+        # Create room
+        create_response = await matrix_client.room_create(
+            name = event.body,
+            is_direct = True,
+            visibility = RoomVisibility.public,
+            invite = MATRIX_USERS_TO_INVITE,
+            power_level_override = {
+                "events": {
+                    "m.room.name": 0,
+                    "m.room.topic": 0
+                }
+            }
+        )
+
+        if type(create_response) == RoomCreateError:
+            print(f"Failed to create room: {create_response}")
+        else:
+            db_cursor.execute("INSERT INTO rooms (id, phone) VALUES (?, ?)", create_response.room_id, event.body)
+            db_connection.commit()
+
+            print(f"Room created")
+
     if not (event.sender == "SMS - Urgence" or event.sender == "@sms-urgence:sms.crf.tools"):
         twilio_client.messages.create(
             body = event.body,
@@ -74,51 +119,67 @@ async def incoming_sms(request: Request, From: str = Form(...), Body: str = Form
         raise HTTPException(status_code = 400, detail = "Error in Twilio Signature")
 
     print(f"Received message from {From} with body: {Body}")
-    
+
     # Retrieve the Matrix client from the application state
     matrix_client = request.app.state.matrix_client
 
-    # Try to find an existing room for this sender
-    find_room_response = await matrix_client.room_resolve_alias("#" + From[1:] + ":sms.crf.tools")
+    # Retrive the Matrix room id if it exists
+    db_cursor.execute("SELECT id FROM rooms WHERE phone = ? LIMIT 1", From)
 
-    # If it doesn't exist, create it and then send the message
-    if (type(find_room_response) == RoomResolveAliasError):
+    rooms_exists = True
+    room_id = None
+
+    try:
+        room_id = db_cursor.fetchone()[0]
+    except:
+        rooms_exists = False
+    
+    # If the room does not exist, we need to create it
+    if not rooms_exists:
+        name = From
+
+        # If we have the phone number in Gaia, check who is the sender and use its name for the room
+        with open(CSV_PATH, mode = 'r') as csv_file:
+            contacts = csv.reader(csv_file)
+            for contact in contacts:
+                print(From[3:])
+
+                if contact[2] == From[3:]:
+                    name = contact[1] + " " + contact[0]
+
+        # Create room
         create_response = await matrix_client.room_create(
-            name = From,
-            alias = From[1:],
+            name = name,
             is_direct = True,
             visibility = RoomVisibility.public,
-            invite = MATRIX_USERS_TO_INVITE
+            invite = MATRIX_USERS_TO_INVITE,
+            power_level_override = {
+                "events": {
+                    "m.room.name": 0,
+                    "m.room.topic": 0
+                }
+            }
         )
 
         if type(create_response) == RoomCreateError:
             print(f"Failed to create room: {create_response}")
         else:
-            second_attempt_response = await matrix_client.room_send(
-                room_id = create_response.room_id,
-                message_type = "m.room.message",
-                content = {
-                    "msgtype": "m.text",
-                    "body": Body
-                }
-            )
+            db_cursor.execute("INSERT INTO rooms (id, phone) VALUES (?, ?)", create_response.room_id, From)
+            db_connection.commit()
 
-            if type(second_attempt_response) == RoomSendError:
-                print(f"Failed to send message after creating room: {second_attempt_response}")
+            room_id = create_response.room_id
 
-        
-    # If it does exist, just send the message
-    else:
-        message_sent_response = await matrix_client.room_send(
-            room_id = find_room_response.room_id,
-            message_type = "m.room.message",
-            content = {
-                "msgtype": "m.text",
-                "body": Body
-            }
-        )
+    # We can now post the message in the room
+    post_message_response = await matrix_client.room_send(
+        room_id = room_id,
+        message_type = "m.room.message",
+        content = {
+            "msgtype": "m.text",
+            "body": Body
+        }
+    )
 
-        if type(message_sent_response) == RoomSendError:
-            print(f"Failed to send message in existing room: {message_sent_response}")
+    if type(post_message_response) == RoomSendError:
+        print(f"Failed to send message: {post_message_response}")
 
     return Response("<?xml version=\"1.0\" encoding=\"UTF-8\" ?><Response></Response>", media_type="application/xml")
