@@ -67,7 +67,7 @@ async def message_callback(room: MatrixRoom, event: RoomMessageText) -> None:
         if type(create_response) == RoomCreateError:
             print(f"Failed to create room: {create_response}")
         else:
-            db_cursor.execute("INSERT INTO rooms (id, phone) VALUES (?, ?)", create_response.room_id, event.body)
+            db_cursor.execute("INSERT INTO rooms (id, phone) VALUES (?, ?)", [create_response.room_id, event.body])
             db_connection.commit()
 
             print(f"Room created")
@@ -124,7 +124,7 @@ async def incoming_sms(request: Request, From: str = Form(...), Body: str = Form
     matrix_client = request.app.state.matrix_client
 
     # Retrive the Matrix room id if it exists
-    db_cursor.execute("SELECT id FROM rooms WHERE phone = ? LIMIT 1", From)
+    db_cursor.execute("SELECT id FROM rooms WHERE phone = ? LIMIT 1", [From])
 
     rooms_exists = True
     room_id = None
@@ -164,7 +164,7 @@ async def incoming_sms(request: Request, From: str = Form(...), Body: str = Form
         if type(create_response) == RoomCreateError:
             print(f"Failed to create room: {create_response}")
         else:
-            db_cursor.execute("INSERT INTO rooms (id, phone) VALUES (?, ?)", create_response.room_id, From)
+            db_cursor.execute("INSERT INTO rooms (id, phone) VALUES (?, ?)", [create_response.room_id, From])
             db_connection.commit()
 
             room_id = create_response.room_id
