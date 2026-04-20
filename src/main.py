@@ -46,31 +46,62 @@ matrix_sync_task = None
 
 # Callback for handling incoming Matrix messages
 async def message_callback(room: MatrixRoom, event: RoomMessageText) -> None:
-    if room.room_id == MATRIX_FIRST_SEND:
+    if room.room_id == MATRIX_FIRST_SEND and not (event.sender == "SMS - Urgence" or event.sender == "@sms-urgence:sms.crf.tools"):
         # Retrieve the Matrix client from the application state
         matrix_client = app.state.matrix_client
 
-        # Create room
-        create_response = await matrix_client.room_create(
-            name = event.body,
-            is_direct = True,
-            visibility = RoomVisibility.public,
-            invite = MATRIX_USERS_TO_INVITE,
-            power_level_override = {
-                "events": {
-                    "m.room.name": 0,
-                    "m.room.topic": 0
+        # Retrive the Matrix room id if it exists
+        db_cursor.execute("SELECT id FROM rooms WHERE phone = ? LIMIT 1", [event.body])
+
+        try:
+            room_id = db_cursor.fetchone()[0]
+            await matrix_client.room_send(
+                room_id = MATRIX_FIRST_SEND,
+                message_type = "m.room.message",
+                content = {
+                    "msgtype": "m.text",
+                    "body": "Erreur : La conversation existe déjà."
                 }
-            }
-        )
+            )
+        except:
+            # Create room
+            create_response = await matrix_client.room_create(
+                name = event.body,
+                is_direct = True,
+                visibility = RoomVisibility.public,
+                invite = MATRIX_USERS_TO_INVITE,
+                power_level_override = {
+                    "events": {
+                        "m.room.name": 0,
+                        "m.room.topic": 0
+                    }
+                }
+            )
 
-        if type(create_response) == RoomCreateError:
-            print(f"Failed to create room: {create_response}")
-        else:
-            db_cursor.execute("INSERT INTO rooms (id, phone) VALUES (?, ?)", [create_response.room_id, event.body])
-            db_connection.commit()
+            if type(create_response) == RoomCreateError:
+                print(f"Failed to create room: {create_response}")
+                await matrix_client.room_send(
+                    room_id = MATRIX_FIRST_SEND,
+                    message_type = "m.room.message",
+                    content = {
+                        "msgtype": "m.text",
+                        "body": "Erreur lors de la création de la conversation."
+                    }
+                )
+            else:
+                db_cursor.execute("INSERT INTO rooms (id, phone) VALUES (?, ?)", [create_response.room_id, event.body])
+                db_connection.commit()
 
-            print(f"Room created")
+                await matrix_client.room_send(
+                    room_id = MATRIX_FIRST_SEND,
+                    message_type = "m.room.message",
+                    content = {
+                        "msgtype": "m.text",
+                        "body": "Conversation créée."
+                    }
+                )
+
+                print(f"Room created")
 
     if not (event.sender == "SMS - Urgence" or event.sender == "@sms-urgence:sms.crf.tools"):
         db_cursor.execute("SELECT phone FROM rooms WHERE id = ? LIMIT 1", [room.room_id])
